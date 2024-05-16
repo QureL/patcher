@@ -2,8 +2,12 @@
 #include <stdint.h>
 #include <sys/errno.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #define PATCHER_CMD_LENGTH 12
+#define ERR_PRINT(buff)                                   \
+    sprintf(buff, "mprotect:%d err=%d", __LINE__, errno); \
+    perror(buff);
 #if defined(__i386__) || defined(__x86_64__)
 static uint8_t *build_patch_cmd(uint64_t addr)
 {
@@ -31,44 +35,91 @@ static uint8_t *build_patch_cmd(uint64_t addr)
 #include <unistd.h>
 #include <sys/mman.h>
 
-void *get_page_bound(void *ptr)
+static void *get_page_bound(void *ptr)
 {
     long page_size = sysconf(_SC_PAGESIZE);
     return (void *)((long)ptr & ~(page_size - 1));
 }
 
-long get_distance_to_bound(void *ptr)
+static long get_distance_to_bound(void *ptr)
 {
     long page_size = sysconf(_SC_PAGESIZE);
     return (long)ptr & (page_size - 1);
 }
 
-int exchange_addr(void *src, void *target)
+int patch(patcher *p, void *target)
 {
-    void *bound = get_page_bound(src);
-    long offset = get_distance_to_bound(src);
+    if (!p)
+        return -1;
     char buff[128] = {0};
-    if (mprotect(bound, PATCHER_CMD_LENGTH + offset, PROT_WRITE | PROT_READ | PROT_EXEC) == -1)
-    {
-        sprintf(buff, "mprotect:%d err=%d", __LINE__, errno);
-        perror(buff);
-        return -1;
-    }
-    uint8_t *cmd = build_patch_cmd(target);
+    uint8_t *cmd = NULL;
+
+    cmd = build_patch_cmd((uint64_t)target);
     if (!cmd)
+        return -1;
+
+    p->bound = get_page_bound(p->src);
+    p->offset = get_distance_to_bound(p->src);
+
+    if (mprotect(p->bound, PATCHER_CMD_LENGTH + p->offset, PROT_WRITE | PROT_READ | PROT_EXEC) == -1)
     {
+        ERR_PRINT(buff);
         return -1;
     }
-    memcpy(src, cmd, PATCHER_CMD_LENGTH);
-    if (mprotect(bound, PATCHER_CMD_LENGTH + offset, PROT_READ | PROT_EXEC) == -1)
+
+    memcpy(p->src_temporary, p->src, PATCHER_CMD_LENGTH);
+    memcpy(p->src, cmd, PATCHER_CMD_LENGTH);
+    if (mprotect(p->bound, PATCHER_CMD_LENGTH + p->offset, PROT_READ | PROT_EXEC) == -1)
     {
-        sprintf(buff, "mprotect:%d err=%d", __LINE__, errno);
-        perror(buff);
+        ERR_PRINT(buff);
         free(cmd);
         return -1;
     }
     free(cmd);
     return 0;
 }
+int recover(patcher *p)
+{
+    if (!p)
+        return -1;
+    char buff[128] = {0};
+    if (mprotect(p->bound, PATCHER_CMD_LENGTH + p->offset, PROT_WRITE | PROT_READ | PROT_EXEC) == -1)
+    {
+        ERR_PRINT(buff);
+        return -1;
+    }
+    memcpy(p->src, p->src_temporary, PATCHER_CMD_LENGTH);
+    if (mprotect(p->bound, PATCHER_CMD_LENGTH + p->offset, PROT_READ | PROT_EXEC) == -1)
+    {
+        ERR_PRINT(buff);
+        return -1;
+    }
+}
 
 #endif
+
+patcher *new_patcher(void *src)
+{
+    patcher *p = (patcher *)malloc(sizeof(patcher));
+    if (!p)
+        return NULL;
+
+    p->src_temporary = (uint8_t *)malloc(PATCHER_CMD_LENGTH);
+    if (!p->src_temporary)
+    {
+        free(p);
+        return NULL;
+    }
+    p->patch = patch;
+    p->recover = recover;
+    p->src = src;
+    return p;
+}
+
+void release_patcher(patcher *p)
+{
+    if (!p)
+        return;
+    free(p->src_temporary);
+    free(p);
+}

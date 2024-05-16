@@ -16,20 +16,23 @@ int mock(int arg)
 
 int test_mock_simple_function()
 {
-    int ret;
-    ret = exchange_addr(larger_than_ten, mock);
-    if (ret == 0)
-    {
-        fprintf(stdout, "mock succcess\n");
-    }
-    else
-    {
-        fprintf(stdout, "mock succcess\n");
+    int ret = 0;
+
+    patcher *p = new_patcher(larger_than_ten);
+    if (!p)
         return -1;
+    ret = p->patch(p, mock);
+    if (ret == -1)
+    {
+        fprintf(stdout, "mock failed\n");
+        goto out;
     }
-    ret = larger_than_ten(90);
-    fprintf(stdout, "%d\n", ret);
-    return 0;
+
+    printf("%d\n", larger_than_ten(0));
+out:
+    p->recover(p);
+    release_patcher(p);
+    return ret;
 }
 
 int my_printf(const char *__restrict __fmt, ...)
@@ -40,22 +43,27 @@ int my_printf(const char *__restrict __fmt, ...)
 
 int test_mock_libc_function()
 {
-    int ret;
-    ret = exchange_addr(printf, my_printf);
-    if (ret == 0)
-    {
-        fprintf(stdout, "mock succcess\n");
-    }
-    else
-    {
-        fprintf(stdout, "mock succcess\n");
+    int ret = 0;
+
+    patcher *p = new_patcher(printf);
+    if (!p)
         return -1;
+    ret = p->patch(p, my_printf);
+    if (ret == -1)
+    {
+        fprintf(stdout, "mock failed\n");
+        goto out;
     }
+
     printf("hello");
-    return 0;
+out:
+    p->recover(p);
+    release_patcher(p);
+    return ret;
 }
 
 int main()
 {
     test_mock_libc_function();
+    test_mock_simple_function();
 }
